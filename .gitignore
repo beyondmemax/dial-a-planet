@@ -1,0 +1,12 @@
+# NASA videos are downloaded by scripts/download_data.sh, not committed
+data/*
+!data/.gitkeep
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
