@@ -10,11 +10,11 @@ Designed as a walk-up kiosk prototype for NASA's Earth Information Center, usabl
 
 ```
 [Knob + Joystick + 2 Buttons]  →  Raspberry Pi Pico 2 W  →  USB serial  →  Chrome web app  →  speaker
-        (Grove parts)              (pico/main.py)                         (web/, in progress)
+        (Grove parts)              (pico/main.py)                         (web/)
 ```
 
 - The **Pico** reads the controls and sends simple text lines (`J,x,y`, `K,value`, `B,id`).
-- The **web app** (Chrome/Edge, Web Serial API) plays NASA's visualization videos, maps the cursor to places on Earth, speaks what's there, and turns the data into music.
+- The **web app** (Chrome/Edge, Web Serial API) shows NASA's yearly maps, figures out which country/ocean/city is under the cursor, speaks it, measures the real light level there, and turns it into music (Tone.js).
 
 ## Controls
 
@@ -48,22 +48,28 @@ Pico power: **3V3(OUT) → + rail, GND → − rail**, and bridge the left and r
 3. Test: in Thonny's Shell you should see `READY`, then `J,…` / `K,…` lines, and `B,1` / `B,2` / `B,9` on presses
 4. **Close Thonny** before using the web app. Only one program can use the Pico's USB port.
 
-**2. NASA data** (about 56 MB, not stored in git)
+**2. NASA data** (Night Lights: 12 yearly maps + a change map, about 15 MB, not stored in git)
 ```bash
 bash scripts/download_data.sh
 ```
 
-**3. Run locally**
+**3. Run it**
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 8000      # from the repo folder; leave it running
 ```
-Then open `http://localhost:8000/web/` in **Chrome** (web app coming next).
+1. Open **http://localhost:8000/web/** in **Chrome or Edge** (Safari/Firefox have no Web Serial)
+2. Click **Connect controller** and pick the Pico (Board CDC). This click also turns sound on.
+3. Turn the knob to Night Lights, press **A**
+
+No controller? Use the keyboard: arrows = joystick, `,` `.` = knob, Enter = A, Esc = B, Space = joystick click.
 
 ## Repo layout
 
 ```
 pico/main.py          Pico controller script (MicroPython)
-web/                  Chrome web app (in progress)
+web/                  Chrome web app (index.html, app.js, style.css)
+web/geo/              Country, city and ocean outlines (Natural Earth, public domain)
+web/vendor/Tone.js    Audio library (MIT license), bundled so it works offline
 scripts/              Data download script
 data/                 NASA videos go here (git-ignored)
 docs/controls.md      What every control does
@@ -72,7 +78,9 @@ docs/team-context.md  Full project context, for teammates and their AI assistant
 
 ## Data credits
 
+Place names and outlines: [Natural Earth](https://www.naturalearthdata.com/) (public domain).
+
 Visualizations by NASA's Scientific Visualization Studio:
-- [Change in Night Lights between 2012 and 2023, EIC Version](https://svs.gsfc.nasa.gov/5313/)
+- [Change in Night Lights between 2012 and 2023, equirectangular SOS version](https://svs.gsfc.nasa.gov/5475/) (what the app uses) / [EIC version](https://svs.gsfc.nasa.gov/5313/)
 - [Global Sea Surface Currents and Temperature](https://svs.gsfc.nasa.gov/3912/)
 - [GEDI Forest Height](https://svs.gsfc.nasa.gov/4950/)

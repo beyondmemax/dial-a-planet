@@ -50,11 +50,20 @@ Testing starts with **just one dataset** (Night Lights), then adds the others.
 
 | # | Dataset | "Time" on the knob | Status |
 |---|---|---|---|
-| 1 | **Night Lights 2012–2023** | Years 2012 → 2023 (the first part of NASA's video) | Start here |
+| 1 | **Night Lights 2012–2023** | Years 2012 → 2023 (12 zones on the knob) | ✅ Built (`web/`) |
 | 2 | **Ocean currents & temperature** | Dates across the simulation (exact range still to confirm from NASA's frame date list) | Next |
 | 3 | **Forest height (GEDI)** | ⚠️ NASA's video is a global reveal, not year-by-year, so the knob would scrub the animation | Open question |
 
 ## Still to decide
-- [ ] Confirm the click order above (Area → Details → Music → Area)
+- [x] Click order Area → Details → Music → Area (built this way)
 - [ ] What the forest knob does, since there are no real "years" in that video
-- [ ] Spoken announcements (browser speech) vs. text on screen vs. both. Recommend both, for accessibility
+- [x] Spoken + on screen: both (browser speech plus a screen-reader live region)
+
+## How it's built (web/app.js)
+
+- **Knob:** zones with "stickiness" so it doesn't flicker at borders (3 zones in the menu, 12 in Night Lights)
+- **Joystick:** rate control, like a game stick: the further you push, the faster the cursor moves (dead zone around center, calibrated to our joystick: center X≈510, Y≈508)
+- **Place names:** offline point-in-polygon on Natural Earth country and ocean outlines, plus the nearest big city within 400 km. Coastal cities that fall "in the sea" on the simplified outlines get snapped to the nearby city.
+- **Light level:** read from the NASA map's pixels around the cursor (0–10), compared with 2012 (or with 2023 when you're on 2012)
+- **Music:** Tone.js. Brighter = more and higher plucked notes, a louder "city hum", and a faster tempo. Dark land = soft drone. Ocean = slow waves. Sound pans left/right with longitude.
+- Speech says the new place once the cursor settles for 0.3 s; Details re-speaks after 0.7 s on a new spot or year

@@ -5,7 +5,7 @@ NASA Space Apps Challenge 2026 · Space Apps NYC (Brooklyn)
 
 **Repo:** https://github.com/beyondmemax/dial-a-planet (this file lives at `docs/team-context.md`)
 
-Last updated: Saturday, Nov 14, 2026, ~2:30pm (hackathon day 1). Status: **All hardware wired and tested (LCD postponed). Pico script done. Final control scheme decided. Web app next.**
+Last updated: Saturday, Nov 14, 2026, ~3:00pm (hackathon day 1). Status: **All hardware wired and tested (LCD postponed). Pico script done. Web app v1 built for Night Lights (menu, years, place names, details, music). Testing on real hardware next.**
 
 ---
 
@@ -146,7 +146,15 @@ Laptop → Pico message for the LCD: `L,<line1>|<line2>` (16 characters per line
 - Click: X = 1023 exactly. Highest normal X seen was 778, so the ≥1000 threshold is safe.
 - Knob: full 0–1023 sweep; idles with noise blips up to ~27 near 0, so smooth it (average several reads).
 
-### Interface B (UPDATED Saturday ~2:15pm): local video files, not JSON
+### Interface B (UPDATED Saturday ~3pm): Night Lights uses yearly PNG maps
+
+**Night Lights now comes from NASA SVS 5475** (the Science-On-a-Sphere version): a perfect **equirectangular** (lat/long) map, 2048×1024. In NASA's frame sequence, each year holds for 60 frames, so the frame for year Y is `30 + 60 × (Y − 2012)`, and frame 1100 is the 2012→2023 change map (purple = more light, orange = less). `scripts/download_data.sh` saves them as `data/nightlights/2012.png … 2023.png` + `change.png` (~1.1 MB each). Because the map is equirectangular: `x = (lon + 180) / 360 × width`, `y = (90 − lat) / 180 × height`.
+
+Measured pixel facts: unlit land ≈ 67 brightness, ice ≈ 75, city centers 240+. Real changes are visible (e.g. Kyiv dimmer in 2023 than 2012, Mosul brighter). NASA's year label is printed on the map at about 10°S over the oceans.
+
+The video notes below still apply to the **ocean and forest** datasets (later).
+
+### (Earlier) local video files
 
 We checked NASA's frame folders: the ocean and forest frames are **TIFFs (6 MB and 66 MB each)**, which Chrome can't draw, and the night-lights frame folder returns **403 Forbidden**. So we switched to NASA's **small video files**. The web app plays each video in a hidden `<video>` element; **the knob sets `video.currentTime`**; each frame is drawn to a canvas and the app reads pixel colors from it. No preprocessing step needed.
 
@@ -275,10 +283,12 @@ Wire colors are Grove standard: **yellow = signal, white = 2nd signal, red = pow
 - [x] 2 Grove buttons wired and tested (Select GP10, Back GP14)
 - [ ] LCD: **postponed**, to add later (I2C on GP4 SDA, GP5 SCL; the script already supports it)
 - [x] Pico script `main.py` written, tested, and saved to the Pico (sends Interface A messages; LCD optional)
-- [ ] Download the 3 NASA videos into `dial-a-planet/data/` and confirm they play in Chrome via the local server
-- [ ] Web app (next)
-- [ ] Data preprocessing script (SVS API → frames → 256×128 → Interface B JSON)
-- [ ] Web app: Web Serial + canvas + Tone.js + menu/dataset screens + Area/Details/Music layers + place-name lookup + keyboard fallback + ARIA announcements
+- [x] Repo: https://github.com/beyondmemax/dial-a-planet
+- [x] Web app v1 (`web/`): Web Serial, dataset menu, knob→years, joystick cursor, offline place names (Natural Earth), Details layer with real light levels and change vs 2012, Music layer (Tone.js), speech, keyboard fallback. Tested in headless Chrome with simulated controller input.
+- [ ] Test on the real Pico + real NASA images (Max)
+- [ ] Tune music and joystick speed by ear
+- [ ] Ocean + forest datasets (forest has no yearly data; decide what its knob does)
+- [ ] LCD (optional)
 - [ ] Sound tuning per dataset
 - [ ] Enclosure with tactile labels
 - [ ] Backup demo video
