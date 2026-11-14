@@ -99,8 +99,9 @@ let voice = null, sayTimer = null, pendingSince = 0, lastText = '', retried = fa
 const keepAlive = [];
 
 function pickVoice() {
-  if (!('speechSynthesis' in window)) return;
-  const vs = speechSynthesis.getVoices();
+  if (!('speechSynthesis' in window) || typeof speechSynthesis.getVoices !== 'function') return;
+  let vs = [];
+  try { vs = speechSynthesis.getVoices() || []; } catch (e) { return; }
   voice = vs.find((v) => v.localService && /^en[-_]US/i.test(v.lang))
        || vs.find((v) => v.localService && v.lang.startsWith('en'))
        || vs.find((v) => v.lang.startsWith('en')) || null;
@@ -121,7 +122,7 @@ function speakNow(text) {
     const i = keepAlive.indexOf(u); if (i >= 0) keepAlive.splice(i, 1);
   };
   keepAlive.push(u); if (keepAlive.length > 6) keepAlive.shift();
-  speechSynthesis.resume();
+  try { speechSynthesis.resume(); } catch (e) { /* older engines */ }
   speechSynthesis.speak(u);
   pendingSince = performance.now();
 }
@@ -139,7 +140,7 @@ function resetSpeech() {
   if (!('speechSynthesis' in window)) return;
   clearTimeout(sayTimer);
   speechSynthesis.cancel();
-  speechSynthesis.resume();
+  try { speechSynthesis.resume(); } catch (e) { /* older engines */ }
   pendingSince = 0;
   pickVoice();
 }
