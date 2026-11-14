@@ -90,19 +90,66 @@ function zoneFor(k, n, current) {
 }
 
 // ======================= SPEECH =======================
-let sayTimer = null;
+// Chrome's speech engine can silently stall: when its default voice is an online
+// Google voice (bad Wi-Fi = silence), when cancel()/speak() are spammed, or when
+// a queued utterance gets garbage-collected. So we: pick an offline Mac voice,
+// keep utterances referenced, call resume(), and run a watchdog that resets and
+// retries if speech hasn't started within 2.5 seconds.
+let voice = null, sayTimer = null, pendingSince = 0, lastText = '', retried = false;
+const keepAlive = [];
+
+function pickVoice() {
+  if (!('speechSynthesis' in window)) return;
+  const vs = speechSynthesis.getVoices();
+  voice = vs.find((v) => v.localService && /^en[-_]US/i.test(v.lang))
+       || vs.find((v) => v.localService && v.lang.startsWith('en'))
+       || vs.find((v) => v.lang.startsWith('en')) || null;
+}
+if ('speechSynthesis' in window) {
+  pickVoice();
+  speechSynthesis.addEventListener?.('voiceschanged', pickVoice);
+}
+
+function speakNow(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US';
+  try { if (voice) { u.voice = voice; u.lang = voice.lang; } } catch (e) { voice = null; }
+  u.rate = 1.05;
+  u.onstart = () => { pendingSince = 0; };
+  u.onend = u.onerror = () => {
+    pendingSince = 0;
+    const i = keepAlive.indexOf(u); if (i >= 0) keepAlive.splice(i, 1);
+  };
+  keepAlive.push(u); if (keepAlive.length > 6) keepAlive.shift();
+  speechSynthesis.resume();
+  speechSynthesis.speak(u);
+  pendingSince = performance.now();
+}
+
 function say(text) {
   el.live.textContent = text;
   if (!('speechSynthesis' in window)) return;
+  lastText = text; retried = false;
   clearTimeout(sayTimer);
   speechSynthesis.cancel();
-  // tiny delay: Chrome sometimes drops speech issued right after cancel()
-  sayTimer = setTimeout(() => {
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.05;
-    speechSynthesis.speak(u);
-  }, 60);
+  sayTimer = setTimeout(() => speakNow(text), 80);   // Chrome drops speech issued right after cancel()
 }
+
+function resetSpeech() {
+  if (!('speechSynthesis' in window)) return;
+  clearTimeout(sayTimer);
+  speechSynthesis.cancel();
+  speechSynthesis.resume();
+  pendingSince = 0;
+  pickVoice();
+}
+
+// Watchdog: speech queued but never started -> reset the engine and try once more
+setInterval(() => {
+  if (!pendingSince || performance.now() - pendingSince < 2500) return;
+  resetSpeech();
+  if (!retried && lastText) { retried = true; setTimeout(() => speakNow(lastText), 120); }
+}, 1000);
 
 // ======================= GEOGRAPHY =======================
 async function loadGeo() {
@@ -276,56 +323,113 @@ function detailsText() {
   return text;
 }
 
-// ======================= MUSIC (Tone.js) =======================
+// ======================= CITY SOUND (Tone.js) =======================
+// Night Lights soundscape, all synthesized (no audio files):
+//   bright city -> traffic rumble, passing cars, crowd chatter, horns, the odd siren
+//   dim / dark land -> quiet road, wind, crickets
+//   ocean -> waves
+// Everything scales with the light level under the cursor and pans with longitude.
 const Music = {
   built: false, on: false,
-  scale: ['C3', 'D3', 'E3', 'G3', 'A3', 'C4', 'D4', 'E4', 'G4', 'A4', 'C5', 'D5', 'E5', 'G5', 'A5', 'C6'],
   p: { light: 0, ocean: false, pan: 0 },
+  sirenUntil: 0,
 
   build() {
     if (this.built || !window.Tone) return;
-    this.master = new Tone.Volume(-6).toDestination();
+    this.master = new Tone.Volume(6).toDestination();   // louder: laptop + Bluetooth speakers
     this.panner = new Tone.Panner(0).connect(this.master);
-    this.reverb = new Tone.Reverb({ decay: 3, wet: 0.3 }).connect(this.panner);
+    this.space = new Tone.Reverb({ decay: 2.5, wet: 0.25 }).connect(this.panner);
 
-    // City sparkle: short plucked notes, more and higher when brighter
-    this.sparkle = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'triangle' },
-      envelope: { attack: 0.005, decay: 0.25, sustain: 0, release: 0.4 },
-    }).connect(this.reverb);
-    this.sparkle.volume.value = -12;
+    // Traffic rumble: low brown noise
+    this.trafficGain = new Tone.Gain(0).connect(this.panner);
+    this.trafficFilter = new Tone.Filter(250, 'lowpass').connect(this.trafficGain);
+    this.traffic = new Tone.Noise('brown').connect(this.trafficFilter);
 
-    // City hum: filtered pink noise, louder when brighter ("noisy city")
-    this.humGain = new Tone.Gain(0).connect(this.panner);
-    this.humFilter = new Tone.Filter(500, 'bandpass').connect(this.humGain);
-    this.hum = new Tone.Noise('pink').connect(this.humFilter);
+    // Crowd chatter: mid-range noise that flutters like voices
+    this.chatterGain = new Tone.Gain(0).connect(this.space);
+    this.chatterTrem = new Tone.Tremolo({ frequency: 7, depth: 0.7, spread: 0 }).connect(this.chatterGain);
+    this.chatterFilter = new Tone.Filter({ frequency: 1400, type: 'bandpass', Q: 1.2 }).connect(this.chatterTrem);
+    this.chatter = new Tone.Noise('pink').connect(this.chatterFilter);
 
-    // Dark land: soft low drone
-    this.droneGain = new Tone.Gain(0).connect(this.reverb);
-    this.drone = new Tone.Oscillator('C2', 'sine').connect(this.droneGain);
+    // Passing car: a noise "whoosh" swelling in and out
+    this.carFilter = new Tone.Filter(600, 'bandpass').connect(this.panner);
+    this.car = new Tone.NoiseSynth({
+      noise: { type: 'pink' },
+      envelope: { attack: 0.5, decay: 0.2, sustain: 0.5, release: 0.9 },
+    }).connect(this.carFilter);
+    this.car.volume.value = -14;
 
-    // Ocean: brown noise with a slow "wave" swell
+    // Car horn: two buzzy notes together
+    this.hornFilter = new Tone.Filter(1800, 'lowpass').connect(this.space);
+    this.horn = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sawtooth' },
+      envelope: { attack: 0.01, decay: 0.05, sustain: 0.9, release: 0.05 },
+    }).connect(this.hornFilter);
+    this.horn.volume.value = -22;
+
+    // Siren: a sine wave wailing up and down
+    this.sirenGain = new Tone.Gain(0).connect(this.space);
+    this.siren = new Tone.Oscillator(800, 'sine').connect(this.sirenGain);
+    this.sirenLfo = new Tone.LFO({ frequency: 0.35, min: 650, max: 1250 }).connect(this.siren.frequency);
+
+    // Countryside: wind + crickets
+    this.windGain = new Tone.Gain(0).connect(this.panner);
+    this.windFilter = new Tone.AutoFilter({ frequency: 0.08, baseFrequency: 300, octaves: 2 }).connect(this.windGain);
+    this.wind = new Tone.Noise('brown').connect(this.windFilter);
+    this.cricket = new Tone.Synth({
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.002, decay: 0.03, sustain: 0, release: 0.02 },
+    }).connect(this.space);
+    this.cricket.volume.value = -26;
+
+    // Ocean: slow waves
     this.waveGain = new Tone.Gain(0).connect(this.panner);
-    this.waveFilter = new Tone.AutoFilter({ frequency: 0.15, baseFrequency: 200, octaves: 2.5 }).connect(this.waveGain);
+    this.waveFilter = new Tone.AutoFilter({ frequency: 0.12, baseFrequency: 200, octaves: 2.5 }).connect(this.waveGain);
     this.waves = new Tone.Noise('brown').connect(this.waveFilter);
 
-    this.loop = new Tone.Loop((time) => {
-      const { light, ocean } = this.p;
-      const density = ocean ? 0.04 : 0.06 + light * 0.85;
-      if (Math.random() < density) {
-        const lo = Math.floor(light * 8);
-        const note = this.scale[clamp(lo + Math.floor(Math.random() * 7), 0, this.scale.length - 1)];
-        this.sparkle.triggerAttackRelease(note, '16n', time, 0.25 + 0.6 * Math.random() * Math.max(light, 0.2));
-      }
-    }, '16n');
+    // Random city events, checked 8 times a second
+    this.loop = new Tone.Loop((time) => this.events(time), 0.125);
     this.built = true;
+  },
+
+  events(time) {
+    const { light, ocean } = this.p;
+    if (ocean) return;
+    const r = Math.random;
+    // passing cars: a few per second downtown, rare in the countryside
+    if (r() < 0.01 + light * 0.18) {
+      const f = 300 + r() * 500;
+      this.carFilter.frequency.setValueAtTime(f, time);
+      this.carFilter.frequency.linearRampToValueAtTime(f * 0.6, time + 1.4);
+      this.car.triggerAttackRelease(0.6 + r() * 0.8, time, 0.4 + light * 0.6);
+    }
+    // horns: only where it's busy
+    if (light > 0.25 && r() < (light ** 2) * 0.06) {
+      const pair = r() < 0.5 ? ['F4', 'A4'] : ['G4', 'B4'];
+      const len = r() < 0.3 ? 0.5 : 0.15;
+      this.horn.triggerAttackRelease(pair, len, time, 0.6 + 0.4 * r());
+      if (r() < 0.4) this.horn.triggerAttackRelease(pair, 0.12, time + len + 0.12, 0.6);   // double honk
+    }
+    // siren: big bright cities, now and then (about every 20-30 s)
+    const now = Tone.now();
+    if (light > 0.5 && now > this.sirenUntil + 8 && r() < 0.005) {
+      this.sirenUntil = now + 5;
+      this.sirenGain.gain.rampTo(0.05, 0.8, time);
+      this.sirenGain.gain.rampTo(0, 1.2, time + 4);
+    }
+    // crickets: only on dark land
+    if (light < 0.12 && r() < 0.18) {
+      const f = 4000 + r() * 800;
+      for (let i = 0; i < 3; i++) this.cricket.triggerAttackRelease(f, 0.02, time + i * 0.06, 0.5);
+    }
   },
 
   start() {
     this.build();
     if (!this.built || this.on) return;
     this.on = true;
-    this.hum.start(); this.drone.start(); this.waves.start(); this.waveFilter.start();
+    for (const src of [this.traffic, this.chatter, this.siren, this.wind, this.waves]) src.start();
+    this.chatterTrem.start(); this.sirenLfo.start(); this.windFilter.start(); this.waveFilter.start();
     this.loop.start(0);
     Tone.Transport.start();
     this.apply();
@@ -334,12 +438,12 @@ const Music = {
   stop() {
     if (!this.on) return;
     this.on = false;
-    const t = Tone.now();
-    for (const g of [this.humGain, this.droneGain, this.waveGain]) g.gain.rampTo(0, 0.3, t);
+    for (const g of [this.trafficGain, this.chatterGain, this.sirenGain, this.windGain, this.waveGain]) g.gain.rampTo(0, 0.3);
     setTimeout(() => {
       if (this.on) return;
       this.loop.stop(); Tone.Transport.stop();
-      this.hum.stop(); this.drone.stop(); this.waves.stop(); this.waveFilter.stop();
+      for (const src of [this.traffic, this.chatter, this.siren, this.wind, this.waves]) src.stop();
+      this.chatterTrem.stop(); this.sirenLfo.stop(); this.windFilter.stop(); this.waveFilter.stop();
     }, 400);
   },
 
@@ -350,21 +454,42 @@ const Music = {
 
   apply() {
     const { light, ocean, pan } = this.p;
+    const land = ocean ? 0 : 1;
     this.panner.pan.rampTo(pan, 0.2);
-    this.humGain.gain.rampTo(ocean ? 0 : light * 0.35, 0.3);
-    this.humFilter.frequency.rampTo(300 + light * 1500, 0.3);
-    this.droneGain.gain.rampTo(ocean ? 0 : 0.12 * (1 - light), 0.5);
-    this.waveGain.gain.rampTo(ocean ? 0.45 : 0, 0.5);
-    Tone.Transport.bpm.rampTo(80 + light * 60, 0.5);
+    this.trafficGain.gain.rampTo(land * (0.05 + light * 0.55), 0.4);
+    this.trafficFilter.frequency.rampTo(180 + light * 500, 0.4);
+    this.chatterGain.gain.rampTo(land * Math.max(0, light - 0.2) * 0.35, 0.4);
+    this.windGain.gain.rampTo(land * Math.max(0, 0.3 - light) * 0.6, 0.6);
+    this.waveGain.gain.rampTo(ocean ? 0.5 : 0, 0.6);
+  },
+
+  // Short chime for the "Test sound" button
+  chime() {
+    this.build();
+    if (!this.built) return;
+    const s = new Tone.Synth({ envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.3 } }).connect(this.master);
+    const t = Tone.now();
+    ['C5', 'E5', 'G5'].forEach((n, i) => s.triggerAttackRelease(n, 0.15, t + i * 0.12));
+    setTimeout(() => s.dispose(), 1500);
   },
 };
 
+function soundDescription() {
+  if (!S.place) return '';
+  if (S.place.kind === 'ocean') return 'ocean waves';
+  const s = lightAt(S.yearIndex, S.lat, S.lon, 5);
+  if (s < 0.12) return 'quiet countryside: wind and crickets';
+  if (s < 0.35) return 'small town: light traffic';
+  if (s < 0.6) return 'busy city: traffic and voices';
+  return 'big city: heavy traffic, horns and sirens';
+}
+
 async function unlockAudio() {
   if (window.Tone && Tone.context.state !== 'running') {
-    try { await Tone.start(); } catch (e) { /* needs a user gesture */ }
+    try { await Tone.start(); await Tone.context.resume(); } catch (e) { /* needs a user gesture */ }
   }
-  const ok = window.Tone && Tone.context.state === 'running';
-  el.soundBtn.textContent = ok ? 'Sound on' : 'Start sound';
+  const ok = !!window.Tone && Tone.context.state === 'running';
+  el.soundBtn.textContent = ok ? 'Test sound ✓' : 'Start sound';
   el.soundBtn.classList.toggle('done', ok);
   return ok;
 }
@@ -387,7 +512,7 @@ function showScreen() {
   el.dsScreen.classList.toggle('hidden', !inDs);
   el.layer.classList.toggle('hidden', !inDs);
   el.where.textContent = inDs ? `${S.ds.name} · ${S.ds.years[S.yearIndex]}` : 'Menu';
-  el.layer.textContent = `Layer: ${{ area: 'Area', details: 'Details', music: 'Music' }[S.layer]}`;
+  el.layer.textContent = `Layer: ${{ area: 'Area', details: 'Details', music: 'City sounds' }[S.layer]}`;
 }
 
 function drawMap() {
@@ -410,7 +535,7 @@ function updateReadout() {
   if (!S.place) return;
   el.rTitle.textContent = S.place.label;
   if (S.layer === 'details') el.rText.textContent = detailsText();
-  else if (S.layer === 'music') el.rText.textContent = `Music: ${S.place.kind === 'ocean' ? 'ocean waves' : `city sound, ${lightWord(lightAt(S.yearIndex, S.lat, S.lon))}`}. Click the joystick to stop.`;
+  else if (S.layer === 'music') el.rText.textContent = `Sound: ${soundDescription()}. Click the joystick to stop.`;
   else {
     el.rText.textContent = S.place.kind === 'ocean'
       ? 'Open ocean.'
@@ -490,7 +615,7 @@ async function cycleLayer() {
     } else {
       updateMusic();
       Music.start();
-      say('Music');
+      say(`City sounds. ${soundDescription()}`);
     }
   } else {
     Music.stop();
@@ -675,7 +800,10 @@ async function init() {
   renderMenu(); showScreen(); setConnected(false);
   el.connectBtn.addEventListener('click', connectClicked);
   el.soundBtn.addEventListener('click', async () => {
-    if (await unlockAudio()) say('Sound is on.');
+    resetSpeech();
+    const audio = await unlockAudio();
+    if (audio) Music.chime();
+    say(audio ? 'Sound and voice are working.' : 'Voice is working, but sound is blocked. Click again.');
   });
   try {
     await loadGeo();
